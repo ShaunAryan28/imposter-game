@@ -1,1 +1,129 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Imposter</title><style>body{font-family:system-ui;background:#111827;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0}.card{background:#1f2937;padding:28px;border-radius:20px;width:min(420px,90%);box-sizing:border-box}input,button{width:100%;padding:13px;margin:7px 0;border-radius:10px;border:0;font-size:16px}button{background:#8b5cf6;color:white;font-weight:700;cursor:pointer}.secondary{background:#374151}h1{text-align:center}.hidden{display:none}.word{font-size:40px;text-align:center;padding:25px;background:#111827;border-radius:15px;margin:15px 0}.muted{color:#cbd5e1}.player{padding:8px;background:#374151;border-radius:8px;margin:5px 0}</style></head><body><main class="card"><h1>🎭 Imposter</h1><section id="home"><input id="name" placeholder="Your name"><button onclick="create()">Create room</button><input id="code" placeholder="Room code"><button class="secondary" onclick="join()">Join room</button></section><section id="room" class="hidden"><p>Room: <b id="roomCode"></b></p><p class="muted">Share this code with your friends.</p><div id="players"></div><button id="start" onclick="start()">Start game</button><div id="secret" class="hidden"><p class="muted">Your secret word:</p><div class="word" id="word">••••••</div><p id="role" class="muted"></p></div><button class="secondary" onclick="resetGame()">New round</button></section><p id="msg" class="muted"></p></main><script src="/socket.io/socket.io.js"></script><script>const socket=io();let room,me;const $=id=>document.getElementById(id);function msg(x){$('msg').textContent=x}function create(){socket.emit('create',{name:$('name').value})}function join(){socket.emit('join',{name:$('name').value,code:$('code').value})}function start(){socket.emit('start')}function resetGame(){socket.emit('reset');$('secret').classList.add('hidden')}socket.on('joined',x=>{room=x;me=x.you;$('home').classList.add('hidden');$('room').classList.remove('hidden');$('roomCode').textContent=x.code;render(x)});socket.on('state',render);function render(x){if(!x)return;$('roomCode').textContent=x.code;$('players').innerHTML=x.players.map(p=>`<div class="player">${p.name}${p.id===x.host?' 👑':''}${p.hasWord?' ✅':''}</div>`).join('');$('start').style.display=x.host===me&&!x.started?'block':'none'}socket.on('privateWord',x=>{$('secret').classList.remove('hidden');$('word').textContent=x.word;$('role').textContent=x.role==='imposter'?'You are the IMPOSTER 🤫':'You are a regular player';msg('Give a one-word clue when it is your turn.')});socket.on('errorMsg',msg)</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Imposter</title>
+  <style>
+    body{font-family:system-ui;background:#111827;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0}
+    .card{background:#1f2937;padding:28px;border-radius:20px;width:min(460px,92%);box-sizing:border-box;box-shadow:0 12px 40px #0004}
+    input,button{width:100%;padding:13px;margin:7px 0;border-radius:10px;border:0;font-size:16px;box-sizing:border-box}
+    button{background:#8b5cf6;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#374151}
+    h1{text-align:center}.hidden{display:none}.word{font-size:40px;text-align:center;padding:25px;background:#111827;border-radius:15px;margin:15px 0}
+    .muted{color:#cbd5e1}.player{padding:10px;background:#374151;border-radius:8px;margin:5px 0;display:flex;justify-content:space-between;gap:8px;align-items:center}
+    .player button{width:auto;padding:8px 12px;margin:0;background:#dc2626}.pill{font-size:12px;background:#4b5563;padding:3px 7px;border-radius:999px}.success{color:#86efac}.warning{color:#fcd34d}
+    #msg{white-space:pre-line}.divider{height:1px;background:#4b5563;margin:18px 0}
+  </style>
+</head>
+<body>
+<main class="card">
+  <h1>🎭 Imposter</h1>
+
+  <section id="home">
+    <input id="name" placeholder="Your name" maxlength="30">
+    <button onclick="create()">Create room</button>
+    <input id="code" placeholder="Room code">
+    <button class="secondary" onclick="join()">Join room</button>
+  </section>
+
+  <section id="room" class="hidden">
+    <p>Room: <b id="roomCode"></b></p>
+    <p class="muted">Share this code with your friends.</p>
+    <div id="players"></div>
+
+    <button id="start" onclick="start()">Start game</button>
+    <button id="startVoting" onclick="startVoting()" class="hidden">Start voting</button>
+
+    <div id="secret" class="hidden">
+      <div class="divider"></div>
+      <p class="muted">Your secret word:</p>
+      <div class="word" id="word">••••••</div>
+      <p id="role" class="muted"></p>
+      <p class="muted">Give one word as your clue, then wait for the host to start voting.</p>
+    </div>
+
+    <div id="votingPanel" class="hidden">
+      <div class="divider"></div>
+      <h2>🗳️ Vote for a player</h2>
+      <p class="muted" id="votingInfo">Choose one active player. You cannot change your vote.</p>
+      <div id="voteOptions"></div>
+    </div>
+
+    <button id="nextVotingRound" class="secondary hidden" onclick="nextVotingRound()">Start another voting round</button>
+    <button class="secondary" onclick="resetGame()">New game</button>
+  </section>
+
+  <p id="msg" class="muted"></p>
+</main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  let room, me, lastState;
+  const $ = id => document.getElementById(id);
+  const msg = text => $('msg').textContent = text;
+  const isHost = () => lastState && lastState.host === me;
+  const active = () => (lastState?.players || []).filter(p => !p.eliminated);
+
+  function create(){ socket.emit('create', {name: $('name').value}); }
+  function join(){ socket.emit('join', {name: $('name').value, code: $('code').value}); }
+  function start(){ socket.emit('start'); }
+  function startVoting(){ socket.emit('startVoting'); }
+  function nextVotingRound(){ socket.emit('nextVotingRound'); }
+  function resetGame(){ socket.emit('reset'); }
+
+  function render(state){
+    if(!state) return;
+    lastState = state;
+    $('roomCode').textContent = state.code;
+    $('players').innerHTML = state.players.map(p => {
+      const status = p.eliminated ? '<span class="pill">Removed</span>' : (p.id === state.host ? ' 👑' : '');
+      return `<div class="player"><span>${escapeHtml(p.name)}${status}</span><span>${p.hasWord && !p.eliminated ? '✅' : ''}</span></div>`;
+    }).join('');
+
+    $('start').style.display = isHost() && !state.started ? 'block' : 'none';
+    $('startVoting').classList.toggle('hidden', !(isHost() && state.started && !state.voting && !state.gameOver));
+    $('votingPanel').classList.toggle('hidden', !state.voting);
+    $('nextVotingRound').classList.add('hidden');
+
+    if(state.voting) {
+      const alreadyVoted = state.players.find(p => p.id === me)?.voted;
+      $('votingInfo').textContent = alreadyVoted ? 'Vote submitted. Waiting for everyone else...' : 'Choose one active player. You cannot change your vote.';
+      $('voteOptions').innerHTML = active().filter(p => p.id !== me || active().length <= 2).map(p => {
+        const disabled = alreadyVoted || p.id === me && active().length > 2;
+        return `<button ${disabled ? 'disabled' : ''} onclick="vote('${p.id}')">${escapeHtml(p.name)}${p.id === me ? ' (You)' : ''}</button>`;
+      }).join('');
+    } else $('voteOptions').innerHTML = '';
+  }
+
+  function vote(targetId){ socket.emit('vote', targetId); }
+  function escapeHtml(value){ return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+
+  socket.on('joined', state => {
+    room = state; me = state.you;
+    $('home').classList.add('hidden');
+    $('room').classList.remove('hidden');
+    render(state);
+  });
+  socket.on('state', render);
+  socket.on('privateWord', data => {
+    $('secret').classList.remove('hidden');
+    $('word').textContent = data.word;
+    $('role').textContent = data.role === 'imposter' ? 'You are the IMPOSTER 🤫' : 'You are a regular player';
+    msg('Give a one-word clue when it is your turn.');
+  });
+  socket.on('votingStarted', () => msg('Voting has started! Choose a player.'));
+  socket.on('voteResult', result => {
+    msg(result.message);
+    $('nextVotingRound').classList.add('hidden');
+  });
+  socket.on('resetClient', () => {
+    $('secret').classList.add('hidden');
+    $('votingPanel').classList.add('hidden');
+    $('nextVotingRound').classList.add('hidden');
+    msg('New game ready.');
+  });
+  socket.on('errorMsg', msg);
+</script>
+</body>
+</html>
